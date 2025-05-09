@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -10,11 +10,12 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Card, CardContent } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
-import { AlertCircle, Play, Save, Code, Table, Database, X, Search, Download, Copy, Share2, Loader2 } from 'lucide-react';
+import { AlertCircle, Play, Save, Code, Table, Database, X, Search, Download, Copy, Share2, Loader2, Upload, FileText, FileInput } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { useDropzone } from 'react-dropzone';
 
 const saveQuerySchema = z.object({
   title: z.string().min(1, 'Title is required'),
@@ -23,6 +24,10 @@ const saveQuerySchema = z.object({
 });
 
 type SaveQueryFormValues = z.infer<typeof saveQuerySchema>;
+
+const supportedFileTypes = [
+  '.ttl', '.rdf', '.rdfs', '.owl', '.n3', '.nt', '.jsonld', '.xml'
+];
 
 export default function QueryBuilderPage() {
   const { user } = useAuth();
@@ -40,6 +45,9 @@ LIMIT 10`);
   const [isSaving, setIsSaving] = useState(false);
   const [showSaveDialog, setShowSaveDialog] = useState(false);
   const [activeTab, setActiveTab] = useState('table');
+  const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
+  const [showUploadDialog, setShowUploadDialog] = useState(false);
 
   const form = useForm<SaveQueryFormValues>({
     resolver: zodResolver(saveQuerySchema),
@@ -49,6 +57,70 @@ LIMIT 10`);
       isPublic: false,
     },
   });
+
+  const onDrop = useCallback((acceptedFiles: File[]) => {
+    setUploadedFiles(acceptedFiles);
+  }, []);
+
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop,
+    accept: {
+      'text/turtle': ['.ttl'],
+      'application/rdf+xml': ['.rdf', '.rdfs', '.owl'],
+      'text/n3': ['.n3'],
+      'application/n-triples': ['.nt'],
+      'application/ld+json': ['.jsonld'],
+      'application/xml': ['.xml']
+    },
+    maxFiles: 5,
+    multiple: true
+  });
+
+  const removeFile = (index: number) => {
+    const newFiles = [...uploadedFiles];
+    newFiles.splice(index, 1);
+    setUploadedFiles(newFiles);
+  };
+
+  const uploadFiles = async () => {
+    if (uploadedFiles.length === 0) return;
+    
+    setIsUploading(true);
+    
+    try {
+      const formData = new FormData();
+      uploadedFiles.forEach(file => {
+        formData.append('files', file);
+      });
+
+      const response = await fetch('/api/rdf/upload', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to upload files');
+      }
+
+      const data = await response.json();
+      toast({
+        title: 'Files uploaded successfully',
+        description: `Uploaded ${uploadedFiles.length} file(s)`,
+      });
+      
+      setUploadedFiles([]);
+      setShowUploadDialog(false);
+    } catch (error: any) {
+      toast({
+        variant: 'destructive',
+        title: 'Upload failed',
+        description: error.message,
+      });
+    } finally {
+      setIsUploading(false);
+    }
+  };
 
   const runQuery = async () => {
     setIsRunning(true);
@@ -127,7 +199,6 @@ LIMIT 10`);
     }
   };
 
-  // UI element for variables in the results
   const renderTableHeader = () => {
     if (!results || !results.head || !results.head.vars) return null;
     
@@ -200,9 +271,61 @@ LIMIT 10`);
       <div className="flex flex-col gap-2 mb-6">
         <h1 className="text-3xl font-bold tracking-tight">Query Builder</h1>
         <p className="text-muted-foreground">
-          Create and execute SPARQL queries against our RDF database
+          Create and execute SPARQL queries against our RDF database or your own uploaded files
         </p>
       </div>
+
+      {/* Upload Files Card */}
+      <Card className="mb-6">
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle>Upload RDF Files</CardTitle>
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={() => setShowUploadDialog(true)}
+            >
+              <Upload className="h-4 w-4 mr-2" />
+              Upload Files
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {uploadedFiles.length > 0 ? (
+            <div className="space-y-2">
+              {uploadedFiles.map((file, index) => (
+                <div key={index} className="flex items-center justify-between p-3 border rounded-lg">
+                  <div className="flex items-center gap-3">
+                    <FileText className="h-5 w-5 text-muted-foreground" />
+                    <div>
+                      <p className="font-medium">{file.name}</p>
+                      <p className="text-sm text-muted-foreground">
+                        {(file.size / 1024).toFixed(2)} KB
+                      </p>
+                    </div>
+                  </div>
+                  <Button 
+                    variant="ghost" 
+                    size="icon" 
+                    onClick={() => removeFile(index)}
+                    className="h-8 w-8"
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center py-8 text-center">
+              <FileInput className="h-12 w-12 text-muted-foreground opacity-50" />
+              <h3 className="mt-4 text-lg font-medium">No files uploaded</h3>
+              <p className="mt-2 text-muted-foreground max-w-md">
+                Upload RDF files (TTL, RDF/XML, N-Triples, etc.) to query against them
+              </p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
         <div className="flex flex-col space-y-4">
@@ -427,6 +550,95 @@ LIMIT 10`);
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Upload Files Dialog */}
+      <Dialog open={showUploadDialog} onOpenChange={setShowUploadDialog}>
+        <DialogContent className="sm:max-w-[625px]">
+          <DialogHeader>
+            <DialogTitle>Upload RDF Files</DialogTitle>
+            <DialogDescription>
+              Upload RDF files in Turtle, RDF/XML, N-Triples, or JSON-LD format (max 5 files)
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div 
+            {...getRootProps()} 
+            className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
+              isDragActive ? 'border-purple-500 bg-purple-50/50' : 'border-muted-foreground/30'
+            }`}
+          >
+            <input {...getInputProps()} />
+            <div className="flex flex-col items-center justify-center gap-3">
+              <Upload className="h-10 w-10 text-muted-foreground" />
+              {isDragActive ? (
+                <p className="font-medium text-purple-600">Drop the files here</p>
+              ) : (
+                <>
+                  <p className="font-medium">Drag & drop files here, or click to select</p>
+                  <p className="text-sm text-muted-foreground">
+                    Supported formats: {supportedFileTypes.join(', ')}
+                  </p>
+                </>
+              )}
+            </div>
+          </div>
+
+          {uploadedFiles.length > 0 && (
+            <div className="space-y-2 mt-4 max-h-60 overflow-y-auto">
+              <h4 className="text-sm font-medium">Selected files:</h4>
+              {uploadedFiles.map((file, index) => (
+                <div key={index} className="flex items-center justify-between p-3 border rounded-lg">
+                  <div className="flex items-center gap-3">
+                    <FileText className="h-5 w-5 text-muted-foreground" />
+                    <div>
+                      <p className="font-medium">{file.name}</p>
+                      <p className="text-sm text-muted-foreground">
+                        {(file.size / 1024).toFixed(2)} KB
+                      </p>
+                    </div>
+                  </div>
+                  <Button 
+                    variant="ghost" 
+                    size="icon" 
+                    onClick={() => removeFile(index)}
+                    className="h-8 w-8"
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+          
+          <DialogFooter className="mt-4">
+            <Button 
+              type="button" 
+              variant="outline" 
+              onClick={() => setShowUploadDialog(false)}
+            >
+              Cancel
+            </Button>
+            <Button 
+              type="button"
+              className="bg-purple-600 hover:bg-purple-700"
+              onClick={uploadFiles}
+              disabled={uploadedFiles.length === 0 || isUploading}
+            >
+              {isUploading ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Uploading...
+                </>
+              ) : (
+                <>
+                  <Upload className="mr-2 h-4 w-4" />
+                  Upload Files
+                </>
+              )}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
